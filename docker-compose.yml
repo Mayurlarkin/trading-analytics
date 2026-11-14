@@ -12,7 +12,10 @@ services:
     volumes:
       - db_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      # -h 127.0.0.1 forces a TCP check. On first start the mysql image runs a temporary
+      # server with networking disabled; a socket check ("localhost") passes against it,
+      # so dependants would start too early and fail to connect.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root}"]
       interval: 5s
       timeout: 5s
       retries: 20
