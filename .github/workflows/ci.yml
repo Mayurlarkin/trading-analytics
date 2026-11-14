@@ -7,11 +7,26 @@ on:
 
 jobs:
   api:
-    name: API (lint + tests)
+    name: API (lint + tests on SQLite and MySQL)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: api
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: trading_test
+          MYSQL_USER: trading
+          MYSQL_PASSWORD: trading
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,7 +37,12 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: ruff format --check .
-      - run: pytest -q
+      - name: Tests (SQLite, in memory)
+        run: pytest -q
+      - name: Tests (real MySQL, schema built by the Alembic migrations)
+        run: pytest -q
+        env:
+          TEST_DATABASE_URL: mysql+pymysql://trading:trading@127.0.0.1:3306/trading_test
 
   web:
     name: Web (lint + tests + build)
@@ -54,6 +74,28 @@ jobs:
         run: curl --fail --silent http://localhost:8000/health/db
       - name: Web is served
         run: curl --fail --silent http://localhost:8080 | grep -q "Trading Analytics"
+      - name: Create an account and an API key
+        run: |
+          KEY=$(docker compose exec -T api python -m app.cli create-account \
+            --email ci@example.com --label "CI smoke" --demo --quiet)
+          echo "::add-mask::$KEY"
+          echo "API_KEY=$KEY" >> "$GITHUB_ENV"
+      - name: Ingest rejects a request without a key
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8000/ingest/trades \
+            -H 'Content-Type: application/json' -d @.github/smoke/trades.json)
+          test "$status" = "401"
+      - name: Ingest creates a trade, and re-sending it changes nothing
+        run: |
+          send() {
+            curl --fail --silent -X POST http://localhost:8000/ingest/trades \
+              -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
+              -d @.github/smoke/trades.json
+          }
+          first=$(send); echo "first:  $first"
+          echo "$first" | grep -q '"created":1'
+          second=$(send); echo "second: $second"
+          echo "$second" | grep -q '"unchanged":1'
       - name: Show logs on failure
         if: failure()
         run: docker compose logs

@@ -5,6 +5,11 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's Depends()/Header() in argument defaults is the framework's idiom.
+"app/routers/*" = ["B008"]
+"app/deps.py" = ["B008"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

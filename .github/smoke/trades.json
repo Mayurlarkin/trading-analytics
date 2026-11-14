@@ -1,0 +1,20 @@
+{
+  "trades": [
+    {
+      "ticket": 900001,
+      "symbol": "US30",
+      "direction": "buy",
+      "volume": "1.00",
+      "open_time": "2026-11-02T14:30:00+00:00",
+      "close_time": "2026-11-02T15:45:00+00:00",
+      "open_price": "42000.50",
+      "close_price": "42100.25",
+      "sl": "41900.00",
+      "tp": "42200.00",
+      "commission": "-3.50",
+      "swap": "0",
+      "profit": "99.75",
+      "strategy_tag": "ci-smoke"
+    }
+  ]
+}
