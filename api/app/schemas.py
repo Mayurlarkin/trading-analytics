@@ -78,3 +78,21 @@ class IngestResult(BaseModel):
     created: int
     updated: int
     unchanged: int
+
+
+class ReportInfoOut(BaseModel):
+    currency: str | None
+    company: str | None
+    account_kind: str | None
+    margin_mode: str | None
+
+
+class Mt5ImportResult(BaseModel):
+    positions_in_report: int
+    created: int
+    updated: int
+    unchanged: int
+    dry_run: bool = Field(description="True: nothing was saved; the counts show what would happen")
+    server_time: str = Field(description="The server-time rule used to convert times to UTC")
+    report: ReportInfoOut
+    warnings: list[str]

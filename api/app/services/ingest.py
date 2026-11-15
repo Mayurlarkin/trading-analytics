@@ -34,16 +34,24 @@ def _get_or_create_instruments(db: Session, symbols: set[str]) -> dict[str, Inst
     return found
 
 
-def _apply(db: Session, account: Account, items: list[TradeIn]) -> IngestResult:
+# Keep IN (...) lists a sensible size when importing thousands of trades at once.
+_LOOKUP_CHUNK = 500
+
+
+def _existing_trades(db: Session, account: Account, tickets: list[int]) -> dict[int, Trade]:
+    found: dict[int, Trade] = {}
+    for start in range(0, len(tickets), _LOOKUP_CHUNK):
+        chunk = tickets[start : start + _LOOKUP_CHUNK]
+        for trade in db.scalars(
+            select(Trade).where(Trade.account_id == account.id, Trade.ticket.in_(chunk))
+        ):
+            found[trade.ticket] = trade
+    return found
+
+
+def _apply(db: Session, account: Account, items: list[TradeIn], *, commit: bool) -> IngestResult:
     instruments = _get_or_create_instruments(db, {i.symbol for i in items})
-    existing = {
-        t.ticket: t
-        for t in db.scalars(
-            select(Trade).where(
-                Trade.account_id == account.id, Trade.ticket.in_([i.ticket for i in items])
-            )
-        )
-    }
+    existing = _existing_trades(db, account, [i.ticket for i in items])
 
     created = updated = unchanged = 0
     for item in items:
@@ -72,19 +80,24 @@ def _apply(db: Session, account: Account, items: list[TradeIn]) -> IngestResult:
         else:
             unchanged += 1
 
-    db.commit()
+    # flush() sends the SQL (so constraint errors surface) without making it permanent.
+    db.commit() if commit else db.flush()
     return IngestResult(received=len(items), created=created, updated=updated, unchanged=unchanged)
 
 
-def ingest_trades(db: Session, account: Account, items: list[TradeIn]) -> IngestResult:
+def ingest_trades(
+    db: Session, account: Account, items: list[TradeIn], *, commit: bool = True
+) -> IngestResult:
     """Insert new trades and update changed ones; re-sending identical data is a no-op.
 
     Idempotency key is (account, ticket). A concurrent request inserting the same row
     trips the unique constraint; we roll back and retry once, which then sees that row.
+    With commit=False the changes are only flushed; the caller decides whether to keep them
+    (used for dry runs).
     """
     for attempt in (1, 2):
         try:
-            return _apply(db, account, items)
+            return _apply(db, account, items, commit=commit)
         except IntegrityError:
             db.rollback()
             if attempt == 2:

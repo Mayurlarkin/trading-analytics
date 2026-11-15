@@ -72,3 +72,52 @@ def test_cli_revoke_api_key(engine, db_session, monkeypatch, capsys) -> None:
     assert cli_main(["revoke-api-key", key[:11]]) == 0
     assert find_account_by_api_key(db_session, key) is None
     assert cli_main(["revoke-api-key", key[:11]]) == 1  # nothing left to revoke
+
+
+def test_cli_create_account_with_server_time_and_update_account(
+    engine, db_session, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr("app.cli.get_engine", lambda: engine)
+    assert (
+        cli_main(
+            [
+                "create-account",
+                "--email",
+                "c@example.com",
+                "--label",
+                "C",
+                "--server-time",
+                "ny_close",
+            ]
+        )
+        == 0
+    )
+    account = db_session.scalars(select(Account)).one()
+    assert account.server_timezone == "ny_close"
+    capsys.readouterr()
+
+    code = cli_main(
+        ["update-account", "--account-id", str(account.id), "--server-time", "Europe/Athens",
+         "--currency", "zar", "--starting-balance", "100000"]
+    )  # fmt: skip
+    db_session.expire_all()
+    account = db_session.scalars(select(Account)).one()
+    assert code == 0
+    assert (account.server_timezone, account.currency) == ("Europe/Athens", "ZAR")
+    assert account.starting_balance == Decimal("100000")
+    assert "server_time=Europe/Athens" in capsys.readouterr().out
+
+
+def test_cli_rejects_a_bad_server_time_and_an_unknown_account(
+    engine, db_session, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr("app.cli.get_engine", lambda: engine)
+    assert cli_main(["create-account", "--email", "c@example.com", "--label", "C", "--quiet"]) == 0
+    account = db_session.scalars(select(Account)).one()
+    capsys.readouterr()
+
+    assert (
+        cli_main(["update-account", "--account-id", str(account.id), "--server-time", "nope"]) == 2
+    )
+    assert "unknown server time rule" in capsys.readouterr().err
+    assert cli_main(["update-account", "--account-id", "999999", "--currency", "USD"]) == 1

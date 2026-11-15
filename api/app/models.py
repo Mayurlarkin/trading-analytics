@@ -49,6 +49,9 @@ class Account(Base):
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     starting_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"))
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
+    # How to read this broker's server clock (see app.timezones). None = not set yet, which
+    # blocks report imports rather than guessing wrong. API ingestion always sends UTC.
+    server_timezone: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
     user: Mapped[User] = relationship(back_populates="accounts")

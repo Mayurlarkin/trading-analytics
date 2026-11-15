@@ -77,7 +77,8 @@ jobs:
       - name: Create an account and an API key
         run: |
           KEY=$(docker compose exec -T api python -m app.cli create-account \
-            --email ci@example.com --label "CI smoke" --demo --quiet)
+            --email ci@example.com --label "CI smoke" --currency ZAR --server-time ny_close \
+            --demo --quiet)
           echo "::add-mask::$KEY"
           echo "API_KEY=$KEY" >> "$GITHUB_ENV"
       - name: Ingest rejects a request without a key
@@ -96,6 +97,16 @@ jobs:
           echo "$first" | grep -q '"created":1'
           second=$(send); echo "second: $second"
           echo "$second" | grep -q '"unchanged":1'
+      - name: Import an MT5 report, then import it again
+        run: |
+          import_report() {
+            curl --fail --silent -X POST http://localhost:8000/import/mt5-report \
+              -H "X-API-Key: $API_KEY" -F "file=@api/tests/fixtures/mt5_sample_report.xlsx"
+          }
+          first=$(import_report); echo "first:  $first"
+          echo "$first" | grep -q '"created":8'
+          second=$(import_report); echo "second: $second"
+          echo "$second" | grep -q '"unchanged":8'
       - name: Show logs on failure
         if: failure()
         run: docker compose logs

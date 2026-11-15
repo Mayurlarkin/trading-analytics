@@ -2,7 +2,7 @@
 
 Full-stack trade analytics: import MT5 trade history, get equity curves, drawdown and per-instrument / per-session performance stats.
 
-> **Status: Phase 1 in progress.** Database schema, migrations and a secured trade-ingestion API are in place. The MT5 file importer, analytics and dashboard follow (see [Roadmap](#roadmap)).
+> **Status: Phase 1 (data in) nearly done.** Trades can be imported from an MT5 report or posted by an EA through a secured, idempotent API. Analytics and the dashboard come next (see [Roadmap](#roadmap)).
 
 <!-- Add a CI badge once the repo is on GitHub:
 ![CI](https://github.com/<you>/<repo>/actions/workflows/ci.yml/badge.svg) -->
@@ -24,9 +24,11 @@ Full-stack trade analytics: import MT5 trade history, get equity curves, drawdow
 │  React web   │ ────────────▶ │  FastAPI API │ ───────▶ │  MySQL   │
 │  (Vite, TS)  │               │              │          │          │
 └──────────────┘               └──────▲───────┘          └──────────┘
-                                      │ POST /ingest/trades (API key)
+                       POST /import/mt5-report │ POST /ingest/trades
+                              (API key, both)  │
                                ┌──────┴───────┐
-                               │ MT5 EA / CLI │
+                               │ MT5 report / │
+                               │ EA / scripts │
                                └──────────────┘
 ```
 
@@ -43,38 +45,80 @@ docker compose up --build
 - API docs: http://localhost:8000/docs
 - The home page shows live API and database status.
 
-## Ingesting trades
+## Getting trades in
 
-Trades are sent to `POST /ingest/trades` by an EA or script, authenticated with a per-account API key.
+There are two ways in. Both use a per-account API key and both are safe to repeat.
 
-**1. Create an account and key** (the key is shown once; only its hash is stored):
+| | Use it to | Endpoint |
+|---|---|---|
+| MT5 report upload | back-fill history from an Excel export | `POST /import/mt5-report` |
+| JSON ingest | send trades live from an EA or script | `POST /ingest/trades` |
 
-```bash
-docker compose exec api python -m app.cli create-account \
-  --email you@example.com --label "IFX Demo" --broker IFX --demo
+The easiest way to try either is the interactive docs at http://localhost:8000/docs: click **Authorize**, paste your key, then **Try it out** on any endpoint.
+
+### 1. Create an account (once)
+
+The key is shown once; only its hash is stored. Type it as one line:
+
+```
+docker compose exec api python -m app.cli create-account --email you@example.com --label "IFX Demo" --broker IFX --currency ZAR --server-time ny_close --demo
 ```
 
-**2. Send trades** (PowerShell: use `curl.exe`, since `curl` is an alias for something else):
+Already have an account? Set its currency and broker clock with
+`docker compose exec api python -m app.cli update-account --account-id 1 --currency ZAR --server-time ny_close`.
+Revoke a key with `python -m app.cli revoke-api-key <prefix>` (the first 11 characters of the key).
 
-```bash
-curl.exe -X POST http://localhost:8000/ingest/trades \
-  -H "X-API-Key: ta_..." -H "Content-Type: application/json" \
-  -d @.github/smoke/trades.json
+### 2. Import an MT5 report
+
+1. In MT5, open the **History** tab, choose the date range, right-click, **Report**, **Open XML (MS Excel)**. The report must be in English.
+2. In the docs page, open **POST /import/mt5-report**, **Try it out**, choose the file and **Execute**. Set `dry_run` to `true` first to preview the counts without saving anything.
+3. Or from a terminal (PowerShell: use `curl.exe`; `curl` is an alias for something else):
+
+```
+curl.exe -X POST "http://localhost:8000/import/mt5-report?dry_run=true" -H "X-API-Key: ta_..." -F "file=@C:\path\to\ReportHistory.xlsx"
+```
+
+The response says how many positions were created, updated or unchanged, plus any warnings:
+
+```json
+{"positions_in_report": 628, "created": 628, "updated": 0, "unchanged": 0, "dry_run": false,
+ "server_time": "ny_close", "report": {"currency": "ZAR", "account_kind": "demo", "margin_mode": "hedge", ...},
+ "warnings": []}
+```
+
+- Only the **Positions** section (closed positions) is imported. The Orders and Deals sections and the summary are ignored, apart from the report's own *Total Net Profit*, which is used as a cross-check (a mismatch produces a warning).
+- Import the same file again, or a newer export that includes older trades, and only new or changed positions are touched.
+- Any invalid row rejects the whole file with a list of the offending rows (by spreadsheet row number), so nothing is half-imported.
+
+**Broker server time.** MT5 reports carry no timezone. Times are the broker server's clock, so the importer needs to know how to read it: `ny_close` (New York time + 7 hours, i.e. UTC+2 in winter and UTC+3 in summer, switching on the *US* daylight-saving dates; typical for IFX) or any IANA zone such as `Europe/Athens` or `UTC`. It is stored on the account, or passed per upload as `server_time`. If neither is set the import is refused rather than guessing.
+
+### 3. Send trades live from an EA or script
+
+```
+curl.exe -X POST http://localhost:8000/ingest/trades -H "X-API-Key: ta_..." -H "Content-Type: application/json" -d "@.github/smoke/trades.json"
 # {"received":1,"created":1,"updated":0,"unchanged":0}
 ```
 
-Sending the same trades again returns `"unchanged":1`. You can also try it interactively at http://localhost:8000/docs (click **Authorize**).
-
-Revoke a key with `python -m app.cli revoke-api-key <prefix>` (the first 11 characters of the key).
+Here timestamps must already carry a timezone offset (they are stored as UTC), so the sender converts. Sending the same trades again returns `"unchanged":1`.
 
 ### Design decisions
 
-- **Idempotent by `(account, ticket)`.** An EA can safely retry or re-send history; identical data is a no-op, changed data updates the row, new data is inserted. A concurrent duplicate insert hits the unique constraint and is retried once.
-- **UTC everywhere.** Timestamps must include a timezone offset and are stored as UTC (MySQL `DATETIME` has no timezone, so a custom column type enforces the convention). Broker server time is the sender's job to convert.
+- **Idempotent by `(account, ticket)`.** An EA or importer can safely retry or re-send history; identical data is a no-op, changed data updates the row, new data is inserted. A concurrent duplicate insert hits the unique constraint and is retried once.
+- **One validation path.** The report importer builds the same models the JSON endpoint validates, so both accept and reject exactly the same data.
+- **UTC everywhere.** Timestamps are stored as UTC (MySQL `DATETIME` has no timezone, so a custom column type enforces the convention). Broker clocks are converted explicitly, using a rule that follows US daylight saving, because a fixed European zone is an hour out for a few weeks each spring and autumn (this is covered by tests).
 - **Exact money.** `DECIMAL` columns and Python `Decimal`, never floats. Over-precise values (e.g. 3 decimals on a profit) are rejected rather than silently rounded.
-- **All-or-nothing batches.** One invalid trade rejects the whole request (HTTP 422) so a bad batch can't half-apply. Max 500 trades per request.
+- **All-or-nothing.** One invalid trade (or report row) rejects the whole request, so a bad batch can't half-apply. The JSON endpoint takes at most 500 trades per request; file imports are not limited by that.
+- **Reconciliation.** Imported profit + commission + swap is compared with the report's own total, so missing or misread rows are caught.
+- **Untrusted uploads.** 10 MB upload limit, the workbook is checked for abnormal expansion (zip bombs) and opened in read-only mode.
 - **API keys are hashed** (SHA-256, fine for 256-bit random keys) and individually revocable.
 - **Migrations are the source of truth.** Tests build the schema with Alembic, a test fails if migrations drift from the models, and the whole suite also runs against real MySQL in CI.
+
+### Known limitations
+
+- Broker symbols are stored as exported (e.g. `T100.IFX_M`, `WS30.IFX_M`); mapping them to common names such as NAS100 and US30 is planned.
+- Deposits, withdrawals and the starting balance (the report's Deals section) are not imported yet; the equity curve work will need them.
+- Only English-language `.xlsx` reports are supported; HTML reports are not.
+- The upload limit is enforced by the app; a request-size limit at the web server comes with the deployment hardening phase.
 
 ## Local development
 
@@ -120,13 +164,15 @@ cd api
 
 (`root:root` are the default local credentials from `docker-compose.yml`; adjust if you changed them in `.env`.)
 
-CI also builds the full Docker Compose stack, creates an account, and sends a trade through the live API twice to prove idempotency.
+CI also builds the full Docker Compose stack against a fresh MySQL, then through the live API: creates an account, sends a trade twice, and imports a sample MT5 report twice to prove idempotency. The sample report (`api/tests/fixtures/mt5_sample_report.xlsx`) is synthetic; regenerate it with `python -m tests.mt5_builder`.
+
+> **Never commit real trading history.** `.gitignore` excludes `*.xlsx` outside the test fixtures. Keep your own exports outside the repo.
 
 ## Roadmap
 
 - [x] **Phase 0:** foundations (repo, Compose, CI, health checks)
 - [x] **Phase 1a:** data model, migrations, secured idempotent ingest API, CLI
-- [ ] **Phase 1b:** MT5 statement/CSV importer (needs a sample export)
+- [x] **Phase 1b:** MT5 Excel report importer
 - [ ] **Phase 1c:** MQL5 EA snippet that posts closed trades
 - [ ] **Phase 2:** analytics engine (equity, drawdown, expectancy, breakdowns)
 - [ ] **Phase 3:** API + auth

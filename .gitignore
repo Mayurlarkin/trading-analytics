@@ -18,3 +18,8 @@ dist/
 .vscode/
 .idea/
 .DS_Store
+
+# Real broker exports and other private data must never be committed.
+*.xlsx
+!api/tests/fixtures/*.xlsx
+local-data/

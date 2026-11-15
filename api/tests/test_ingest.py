@@ -7,8 +7,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import ApiKey, Instrument, Trade
-from app.schemas import MAX_BATCH_SIZE
+from app.schemas import MAX_BATCH_SIZE, TradeIn
 from app.services.accounts import create_account
+from app.services.ingest import ingest_trades
 
 URL = "/ingest/trades"
 
@@ -234,3 +235,18 @@ def test_largest_allowed_batch_succeeds(client, db_session, auth_headers, trade_
     response = post(client, auth_headers, *batch)
     assert response.json()["created"] == MAX_BATCH_SIZE
     assert count(db_session, Trade) == MAX_BATCH_SIZE
+
+
+def test_the_service_handles_batches_larger_than_the_http_limit(
+    db_session, account_and_key, trade_payload
+) -> None:
+    """File imports bypass the 500-per-request limit; lookups are chunked internally."""
+    account, _ = account_and_key
+    items = [TradeIn.model_validate(trade_payload(ticket=n)) for n in range(1, 1201)]
+
+    first = ingest_trades(db_session, account, items)
+    second = ingest_trades(db_session, account, items)
+
+    assert (first.created, first.unchanged) == (1200, 0)
+    assert (second.created, second.updated, second.unchanged) == (0, 0, 1200)
+    assert count(db_session, Trade) == 1200
