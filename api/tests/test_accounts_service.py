@@ -123,3 +123,4 @@ def test_cli_rejects_a_bad_server_time_and_an_unknown_account(
     )
     assert "unknown server time rule" in capsys.readouterr().err
     assert cli_main(["update-account", "--account-id", "999999", "--currency", "USD"]) == 1
+    
