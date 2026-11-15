@@ -100,7 +100,9 @@ def test_cli_create_account_with_server_time_and_update_account(
         ["update-account", "--account-id", str(account.id), "--server-time", "Europe/Athens",
          "--currency", "zar", "--starting-balance", "100000"]
     )  # fmt: skip
-    db_session.expire_all()
+    # End this session's read transaction first: MySQL (repeatable read) would otherwise keep
+    # showing the snapshot from before the CLI's update. rollback() also expires the objects.
+    db_session.rollback()
     account = db_session.scalars(select(Account)).one()
     assert code == 0
     assert (account.server_timezone, account.currency) == ("Europe/Athens", "ZAR")
