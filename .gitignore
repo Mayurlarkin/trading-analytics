@@ -23,3 +23,6 @@ dist/
 *.xlsx
 !api/tests/fixtures/*.xlsx
 local-data/
+
+# MT5 presets can contain API keys.
+*.set

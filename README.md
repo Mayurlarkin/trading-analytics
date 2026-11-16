@@ -28,7 +28,8 @@ Full-stack trade analytics: import MT5 trade history, get equity curves, drawdow
                               (API key, both)  │
                                ┌──────┴───────┐
                                │ MT5 report / │
-                               │ EA / scripts │
+                               │ MQL5 EA /    │
+                               │ scripts      │
                                └──────────────┘
 ```
 
@@ -92,14 +93,34 @@ The response says how many positions were created, updated or unchanged, plus an
 
 **Broker server time.** MT5 reports carry no timezone. Times are the broker server's clock, so the importer needs to know how to read it: `ny_close` (New York time + 7 hours, i.e. UTC+2 in winter and UTC+3 in summer, switching on the *US* daylight-saving dates; typical for IFX) or any IANA zone such as `Europe/Athens` or `UTC`. It is stored on the account, or passed per upload as `server_time`. If neither is set the import is refused rather than guessing.
 
-### 3. Send trades live from an EA or script
+### 3. Send trades live from MT5
+
+`mql5/TradeReporterEA.mq5` is a small Expert Advisor that reports every closed position of the account. It never places or changes orders, so run it on its own chart next to your trading EA; your EA does not need to change. Developers who prefer to embed it can `#include "TradeReporter.mqh"` and call `Init`, `Sync` (from `OnTimer` and on `TRADE_TRANSACTION_DEAL_ADD`) as the example does.
+
+**Set up**
+1. Copy the `mql5` folder into MT5 (**File, Open Data Folder**, then `MQL5\Experts\TradingAnalytics\`). Open `TradeReporterEA.mq5` in MetaEditor and press **F7** to compile; it should say 0 errors.
+2. In MT5 open **Tools, Options, Expert Advisors**, tick **Allow WebRequest for listed URL** and add `http://127.0.0.1:8000`. MT5 blocks every web call until the address is listed.
+3. Make sure **Algo Trading** is switched on in the toolbar, then drag **TradeReporterEA** onto any chart and fill in the inputs: `InpApiKey` (your `ta_...` key) and, if you like, `InpStrategyTag`. Leave `InpTimeMode` on NY-close for IFX.
+4. **Try it safely first:** set `InpPreviewOnly` to true. The Experts tab prints the JSON for your newest closed trades and sends nothing, so you can compare it with the MT5 report. Then set it back to false.
+
+**Behaviour**
+- Checks every 15 seconds and whenever a deal is added; one record per *fully closed* position (partial closes are reported once the position is finished).
+- If the API is down or the key is wrong nothing is lost: it remembers the last position it delivered (terminal global variable `TA_LAST_CLOSE_<login>`) and resumes from there, even after an MT5 restart. Re-sending is harmless because the API ignores duplicates.
+- On the very first run it sends the last `InpBackfillDays` (default 7) days. For older history use the report import above.
+- A trade the API rejects is logged and skipped so it cannot block the ones after it.
+- It does nothing in the Strategy Tester, so backtests never reach your real data.
+- Positions are matched with the report importer on the position ticket, so a trade sent by the EA and later found in a report is recognised as the same one. A tag set by the EA is kept when a report without tags is imported.
+- Assumptions to know about: hedging accounts only (it warns on netting); exchange fees, if your broker charges any, are added into the commission figure; times are converted with the same NY-close rule as the importer (a test checks the algorithm against the API for four years of daylight-saving changes).
+- Treat the key like a password: do not share screenshots of the inputs, and keep saved presets (`*.set`) out of git (they are git-ignored here).
+
+**Or post JSON yourself** (any language or script):
 
 ```
 curl.exe -X POST http://localhost:8000/ingest/trades -H "X-API-Key: ta_..." -H "Content-Type: application/json" -d "@.github/smoke/trades.json"
 # {"received":1,"created":1,"updated":0,"unchanged":0}
 ```
 
-Here timestamps must already carry a timezone offset (they are stored as UTC), so the sender converts. Sending the same trades again returns `"unchanged":1`.
+Timestamps here must already carry a timezone offset (they are stored as UTC), so the sender converts. Sending the same trades again returns `"unchanged":1`.
 
 ### Design decisions
 
@@ -173,7 +194,7 @@ CI also builds the full Docker Compose stack against a fresh MySQL, then through
 - [x] **Phase 0:** foundations (repo, Compose, CI, health checks)
 - [x] **Phase 1a:** data model, migrations, secured idempotent ingest API, CLI
 - [x] **Phase 1b:** MT5 Excel report importer
-- [ ] **Phase 1c:** MQL5 EA snippet that posts closed trades
+- [ ] **Phase 1c:** MQL5 reporter EA that posts closed trades *(written and its algorithm tested; waiting for the first compile and run in MT5)*
 - [ ] **Phase 2:** analytics engine (equity, drawdown, expectancy, breakdowns)
 - [ ] **Phase 3:** API + auth
 - [ ] **Phase 4:** React dashboard

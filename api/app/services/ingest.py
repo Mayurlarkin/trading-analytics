@@ -72,6 +72,10 @@ def _apply(db: Session, account: Account, items: list[TradeIn], *, commit: bool)
             trade.instrument = instrument
             changed = True
         for name, value in values.items():
+            # A tag is optional metadata: a sender that has none (e.g. a report import) must
+            # not erase one that an EA already set. Other None values (sl/tp) really mean unset.
+            if name == "strategy_tag" and value is None:
+                continue
             if getattr(trade, name) != value:
                 setattr(trade, name, value)
                 changed = True

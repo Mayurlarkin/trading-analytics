@@ -250,3 +250,30 @@ def test_the_service_handles_batches_larger_than_the_http_limit(
     assert (first.created, first.unchanged) == (1200, 0)
     assert (second.created, second.updated, second.unchanged) == (0, 0, 1200)
     assert count(db_session, Trade) == 1200
+
+
+def test_a_sender_without_a_tag_does_not_erase_an_existing_tag(
+    db_session, account_and_key, trade_payload
+) -> None:
+    account, _ = account_and_key
+    tagged = TradeIn.model_validate(trade_payload(ticket=7, strategy_tag="ict-sweep"))
+    untagged = TradeIn.model_validate(trade_payload(ticket=7, strategy_tag=None))
+    ingest_trades(db_session, account, [tagged])
+
+    result = ingest_trades(db_session, account, [untagged])  # e.g. a later report import
+
+    assert (result.updated, result.unchanged) == (0, 1)
+    assert db_session.scalars(select(Trade)).one().strategy_tag == "ict-sweep"
+
+
+def test_a_new_tag_replaces_the_old_one(db_session, account_and_key, trade_payload) -> None:
+    account, _ = account_and_key
+    ingest_trades(
+        db_session, account, [TradeIn.model_validate(trade_payload(ticket=7, strategy_tag="a"))]
+    )
+    result = ingest_trades(
+        db_session, account, [TradeIn.model_validate(trade_payload(ticket=7, strategy_tag="b"))]
+    )
+
+    assert result.updated == 1
+    assert db_session.scalars(select(Trade)).one().strategy_tag == "b"

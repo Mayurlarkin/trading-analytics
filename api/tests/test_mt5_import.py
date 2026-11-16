@@ -210,3 +210,70 @@ def test_a_workbook_without_positions_is_a_400(client, ready_headers) -> None:
 def test_oversized_uploads_are_refused(client, ready_headers, monkeypatch) -> None:
     monkeypatch.setattr("app.routers.imports.MAX_UPLOAD_BYTES", 100)
     assert upload(client, ready_headers).status_code == 413
+
+
+# --- the EA (JSON ingest) and the report importer must agree ----------------------------
+
+
+def ea_style_payload(trade: Trade) -> dict:
+    """The trade formatted the way mql5/TradeReporter.mqh writes it: everything as strings,
+    volume with 4 decimals, prices with 5, money with 2, zero for an unset stop."""
+
+    def iso(moment: datetime) -> str:
+        return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+    return {
+        "ticket": trade.ticket,
+        "symbol": trade.instrument.symbol,
+        "direction": trade.direction,
+        "volume": f"{trade.volume:.4f}",
+        "open_time": iso(trade.open_time),
+        "close_time": iso(trade.close_time),
+        "open_price": f"{trade.open_price:.5f}",
+        "close_price": f"{trade.close_price:.5f}",
+        "sl": f"{trade.sl or 0:.5f}",
+        "tp": f"{trade.tp or 0:.5f}",
+        "commission": f"{trade.commission:.2f}",
+        "swap": f"{trade.swap:.2f}",
+        "profit": f"{trade.profit:.2f}",
+        "strategy_tag": None,
+    }
+
+
+def test_the_ea_resending_imported_trades_changes_nothing(
+    client, db_session, ready_headers
+) -> None:
+    upload(client, ready_headers)
+    trades = list(db_session.scalars(select(Trade).order_by(Trade.ticket)))
+    assert len(trades) == 8
+
+    response = client.post(
+        "/ingest/trades",
+        json={"trades": [ea_style_payload(t) for t in trades]},
+        headers=ready_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"received": 8, "created": 0, "updated": 0, "unchanged": 8}
+
+
+def test_a_tag_from_the_ea_survives_a_later_report_import(
+    client, db_session, ready_headers
+) -> None:
+    upload(client, ready_headers)
+    trade = db_session.scalars(select(Trade).where(Trade.ticket == 900001)).one()
+    tagged = ea_style_payload(trade) | {"strategy_tag": "magic-42"}
+    assert (
+        client.post("/ingest/trades", json={"trades": [tagged]}, headers=ready_headers).json()[
+            "updated"
+        ]
+        == 1
+    )
+
+    again = upload(client, ready_headers).json()  # the report knows nothing about tags
+
+    assert (again["created"], again["updated"], again["unchanged"]) == (0, 0, 8)
+    db_session.rollback()
+    assert db_session.scalars(select(Trade).where(Trade.ticket == 900001)).one().strategy_tag == (
+        "magic-42"
+    )
