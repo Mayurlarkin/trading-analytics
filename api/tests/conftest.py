@@ -14,6 +14,7 @@ from app.db import Base, get_db
 from app.main import app
 from app.models import Account
 from app.services.accounts import create_account
+from app.services.users import set_password
 
 API_ROOT = Path(__file__).resolve().parents[1]
 
@@ -100,6 +101,37 @@ def client(engine: Engine) -> Iterator[TestClient]:
 @pytest.fixture
 def account_and_key(db_session: Session) -> tuple[Account, str]:
     return create_account(db_session, email="trader@example.com", label="Test", is_demo=True)
+
+
+@pytest.fixture(autouse=True)
+def _cheap_password_hashing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real scrypt costs ~0.3 s per hash; tests do dozens of logins, so use a tiny cost."""
+    monkeypatch.setattr("app.security.SCRYPT_N", 2**4)
+    monkeypatch.setattr("app.security.SCRYPT_P", 1)
+
+
+TEST_PASSWORD = "correct-horse-battery"
+
+
+@pytest.fixture
+def login_headers(client: TestClient, db_session: Session) -> Callable[[str], dict[str, str]]:
+    """Factory: log in as this email (the user must exist) and return Bearer headers."""
+
+    def login(email: str) -> dict[str, str]:
+        assert set_password(db_session, email, TEST_PASSWORD)
+        response = client.post("/auth/login", data={"username": email, "password": TEST_PASSWORD})
+        assert response.status_code == 200, response.text
+        return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+    return login
+
+
+@pytest.fixture
+def user_headers(
+    account_and_key: tuple[Account, str], login_headers: Callable[[str], dict[str, str]]
+) -> dict[str, str]:
+    """Logged-in headers for the owner of the default test account (trader@example.com)."""
+    return login_headers("trader@example.com")
 
 
 @pytest.fixture

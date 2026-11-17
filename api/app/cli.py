@@ -3,11 +3,13 @@
 Examples:
     python -m app.cli create-account --email me@example.com --label "IFX Demo" --demo
     python -m app.cli update-account --account-id 1 --currency ZAR --starting-balance 100000
+    python -m app.cli set-password --email me@example.com
     python -m app.cli stats --account-id 1
     python -m app.cli revoke-api-key ta_AbCdEf12
 """
 
 import argparse
+import getpass
 import sys
 from decimal import Decimal
 
@@ -19,6 +21,7 @@ from app.analytics.text_report import format_groups, format_summary
 from app.db import get_engine
 from app.models import Account
 from app.services.accounts import create_account, revoke_api_key, update_account
+from app.services.users import WeakPassword, set_password
 from app.timezones import InvalidServerTimeRule
 
 
@@ -46,6 +49,14 @@ def _build_parser() -> argparse.ArgumentParser:
     update.add_argument("--server-time", help="'ny_close' or an IANA zone like Europe/Athens")
     update.add_argument("--currency")
     update.add_argument("--starting-balance", type=Decimal)
+
+    password = sub.add_parser("set-password", help="set the dashboard/API login password of a user")
+    password.add_argument("--email", required=True)
+    password.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="read the password from standard input instead of asking (for scripts)",
+    )
 
     stats = sub.add_parser("stats", help="print performance statistics for an account")
     stats.add_argument("--account-id", type=int, required=True)
@@ -93,6 +104,26 @@ def _print_stats(db: Session, account_id: int, tz: str) -> int:
     return 0
 
 
+def _set_password(db: Session, email: str, from_stdin: bool) -> int:
+    if from_stdin:
+        password = sys.stdin.readline().rstrip("\r\n")
+    else:
+        password = getpass.getpass("New password: ")
+        if getpass.getpass("Repeat it: ") != password:
+            print("The two passwords differ; nothing was changed.", file=sys.stderr)
+            return 1
+    try:
+        found = set_password(db, email, password)
+    except WeakPassword as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if not found:
+        print(f"No user with email {email}. Create one with create-account first.", file=sys.stderr)
+        return 1
+    print(f"Password set for {email}. Log in at /docs with Authorize (username = the email).")
+    return 0
+
+
 def _run(args: argparse.Namespace) -> int:
     with Session(get_engine()) as db:
         if args.command == "create-account":
@@ -129,6 +160,9 @@ def _run(args: argparse.Namespace) -> int:
                 f"currency={account.currency}, starting_balance={account.starting_balance}"
             )
             return 0
+
+        if args.command == "set-password":
+            return _set_password(db, args.email, args.password_stdin)
 
         if args.command == "stats":
             return _print_stats(db, args.account_id, args.tz)

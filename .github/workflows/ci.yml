@@ -107,6 +107,28 @@ jobs:
           echo "$first" | grep -q '"created":8'
           second=$(import_report); echo "second: $second"
           echo "$second" | grep -q '"unchanged":8'
+      - name: Log in and read the analytics back through the API
+        run: |
+          echo "correct-horse-battery" | docker compose exec -T api python -m app.cli set-password \
+            --email ci@example.com --password-stdin
+          TOKEN=$(curl --fail --silent -X POST http://localhost:8000/auth/login \
+            -d "username=ci@example.com" -d "password=correct-horse-battery" \
+            | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+          echo "::add-mask::$TOKEN"
+          auth="Authorization: Bearer $TOKEN"
+          get() { curl --fail --silent -H "$auth" "http://localhost:8000$1"; }
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/accounts)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8000/auth/login \
+            -d 'username=ci@example.com' -d 'password=wrong-password-123')" = "401"
+          account=$(get /accounts | python3 -c "import sys, json; print(json.load(sys.stdin)[0]['id'])")
+          summary=$(get "/accounts/$account/summary"); echo "$summary"
+          # 1 trade from the ingest step + the 8 sample report positions (report total -944.87,
+          # plus the smoke trade's 99.75 profit and -3.50 commission)
+          echo "$summary" | grep -q '"trades":9'
+          echo "$summary" | grep -q '"net_profit":"-848.62"'
+          get "/accounts/$account/equity-curve" | grep -q '"points"'
+          get "/accounts/$account/breakdown?by=instrument" | grep -q '"key":"NAS100"'
+          get "/accounts/$account/trades?limit=2" | grep -q '"total":9'
       - name: Show logs on failure
         if: failure()
         run: docker compose logs

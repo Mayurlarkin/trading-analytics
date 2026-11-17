@@ -1,3 +1,4 @@
+import io
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -14,6 +15,7 @@ from app.services.accounts import (
     update_account,
 )
 from app.services.ingest import ingest_trades
+from app.services.users import authenticate
 
 
 def test_create_account_stores_only_the_key_hash(db_session: Session) -> None:
@@ -152,3 +154,33 @@ def test_cli_stats_prints_a_summary_and_handles_missing_and_empty_accounts(
     assert "Profit factor" in out and "2.50" in out
     assert "Instrument" in out and "US30" in out
     assert "Session (UTC)" in out and "Weekday (UTC)" in out
+
+
+def test_cli_set_password_from_stdin_and_interactively(
+    engine, db_session, monkeypatch, capsys, account_and_key
+) -> None:
+    monkeypatch.setattr("app.cli.get_engine", lambda: engine)
+    email = "trader@example.com"
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("a-good-password\n"))
+    assert cli_main(["set-password", "--email", email, "--password-stdin"]) == 0
+    db_session.rollback()
+    assert authenticate(db_session, email, "a-good-password") is not None
+    assert "a-good-password" not in capsys.readouterr().out  # never echoed back
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("short\n"))
+    assert cli_main(["set-password", "--email", email, "--password-stdin"]) == 2
+    assert "10 to 128" in capsys.readouterr().err
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("another-good-password\n"))
+    assert cli_main(["set-password", "--email", "nobody@example.com", "--password-stdin"]) == 1
+    assert "No user" in capsys.readouterr().err
+
+    typed = iter(["first-password-1", "different-password"])
+    monkeypatch.setattr("app.cli.getpass.getpass", lambda prompt: next(typed))
+    assert cli_main(["set-password", "--email", email]) == 1  # the two entries differ
+    typed = iter(["interactive-pass-1", "interactive-pass-1"])
+    assert cli_main(["set-password", "--email", email]) == 0
+    db_session.rollback()
+    assert authenticate(db_session, email, "interactive-pass-1") is not None
+    assert authenticate(db_session, email, "a-good-password") is None  # replaced

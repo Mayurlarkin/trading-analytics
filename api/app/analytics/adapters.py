@@ -1,11 +1,12 @@
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.analytics.symbols import canonical_symbol
 from app.analytics.trade import ClosedTrade
-from app.models import Trade
+from app.models import Account, Trade
 
 
 def to_closed_trade(trade: Trade) -> ClosedTrade:
@@ -41,3 +42,16 @@ def load_closed_trades(
     if closed_until is not None:
         query = query.where(Trade.close_time < closed_until)
     return [to_closed_trade(t) for t in db.scalars(query)]
+
+
+def balance_before(db: Session, account: Account, moment: datetime | None) -> Decimal:
+    """The account balance just before ``moment``: starting balance plus what every trade that
+    closed earlier made. With no moment it is simply the starting balance."""
+    if moment is None:
+        return account.starting_balance
+    earlier = db.scalar(
+        select(func.coalesce(func.sum(Trade.profit + Trade.commission + Trade.swap), 0)).where(
+            Trade.account_id == account.id, Trade.close_time < moment
+        )
+    )
+    return account.starting_balance + Decimal(str(earlier)).quantize(Decimal("0.01"))

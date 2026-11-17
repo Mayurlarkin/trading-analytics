@@ -2,7 +2,7 @@
 
 Full-stack trade analytics: import MT5 trade history, get equity curves, drawdown and per-instrument / per-session performance stats.
 
-> **Status: data in and analytics done.** Trades arrive from an MT5 report or a live EA through a secured, idempotent API, and the analytics engine turns them into equity, drawdown and breakdown statistics (try `python -m app.cli stats`). The API endpoints and the React dashboard come next (see [Roadmap](#roadmap)).
+> **Status: data in and analytics done.** Trades arrive from an MT5 report or a live EA through a secured, idempotent API, and the analytics engine turns them into equity, drawdown and breakdown statistics, served by a login-protected API (try `python -m app.cli stats`, or the interactive docs). The React dashboard comes next (see [Roadmap](#roadmap)).
 
 <!-- Add a CI badge once the repo is on GitHub:
 ![CI](https://github.com/<you>/<repo>/actions/workflows/ci.yml/badge.svg) -->
@@ -163,6 +163,45 @@ It prints the summary (win rate, profit factor, expectancy, streaks, drawdown, r
 
 **Not yet:** a Sharpe-style ratio (MT5's own formula was not reproducible, so it will be added with an explicit definition), and deposits/withdrawals in the equity curve (the starting balance is used instead).
 
+## API and login
+
+Two kinds of caller, two kinds of credential:
+
+| Who | Credential | Can do |
+|---|---|---|
+| A person (dashboard, `/docs`) | email + password, giving a login token | read their own accounts' analytics |
+| A machine (EA, script) | per-account API key | send trades and import reports |
+
+A login token cannot send trades and an API key cannot read analytics, so a leaked EA key cannot be used to browse anything.
+
+**Log in once** (there is no public sign-up yet; users are created from the command line):
+
+```
+docker compose exec api python -m app.cli set-password --email you@example.com
+```
+
+It asks for the password twice and needs 10 to 128 characters. Then open http://localhost:8000/docs, click **Authorize**, and enter your email as the *username* with that password. Every request after that uses your token.
+
+| Endpoint | Returns |
+|---|---|
+| `POST /auth/login` | a login token (valid 8 hours; set `JWT_EXPIRE_MINUTES` to change) |
+| `GET /auth/me` | who you are |
+| `GET /accounts` | your accounts, with trade count and last close |
+| `GET /accounts/{id}/summary` | win rate, profit factor, expectancy, streaks, drawdown, recovery factor |
+| `GET /accounts/{id}/equity-curve` | balance after every trade, with running peak and drawdown |
+| `GET /accounts/{id}/breakdown?by=instrument\|session\|weekday\|hour&tz=...` | the same statistics per group |
+| `GET /accounts/{id}/trades` | paged list; filter by `symbol`, `direction`, `result`, dates; sort by `close_time`, `open_time`, `profit`, `net` |
+
+The analytics endpoints accept `closed_from` (inclusive) and `closed_until` (exclusive), written with a timezone such as `2026-03-01T00:00:00Z`. For a period, the starting balance is the balance at that moment, so drawdown and return are right for that window. Money is returned as strings with 2 decimals (`"-1234.50"`) and ratios as fractions with 4 (`"0.2500"` is 25%), so nothing is lost to floating point.
+
+**Security decisions**
+- Passwords are hashed with scrypt (standard library, cost stored in each hash so it can be raised later) and are never logged or echoed.
+- A wrong password and an unknown email give the same answer and take the same time, so emails cannot be discovered.
+- Tokens are signed (HS256) and must carry an expiry; unsigned, tampered, expired and wrong-key tokens are rejected (all tested).
+- Another user's account answers `404`, exactly like one that does not exist.
+- The signing secret has a development default, but the app **refuses to start** with `ENVIRONMENT` set to anything other than `development` unless `JWT_SECRET` is a random value of 32+ characters (see `.env.example`).
+- Not done yet, planned for the hardening phase: login rate limiting and lockout, refresh tokens, and password reset.
+
 ## Local development
 
 Run only the database in Docker, and the API and web app on your machine for fast reloads.
@@ -218,7 +257,8 @@ CI also builds the full Docker Compose stack against a fresh MySQL, then through
 - [x] **Phase 1b:** MT5 Excel report importer
 - [x] **Phase 1c:** MQL5 reporter EA that posts closed trades
 - [x] **Phase 2:** analytics engine (equity, drawdown, expectancy, breakdowns) and a `stats` CLI command
-- [ ] **Phase 3:** API + auth
+- [x] **Phase 3a:** login + read endpoints over the analytics
+- [ ] **Phase 3b:** manage accounts and API keys, and import reports from the dashboard (login instead of an API key)
 - [ ] **Phase 4:** React dashboard
 - [ ] **Phase 5:** backtester *(stretch)*
 - [ ] **Phase 6:** real-time updates *(stretch)*
