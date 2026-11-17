@@ -5,12 +5,15 @@ from sqlalchemy.orm import Session
 
 from app.cli import main as cli_main
 from app.models import Account, ApiKey, User
+from app.schemas import TradeIn
 from app.services.accounts import (
     create_account,
     create_api_key,
     find_account_by_api_key,
     revoke_api_key,
+    update_account,
 )
+from app.services.ingest import ingest_trades
 
 
 def test_create_account_stores_only_the_key_hash(db_session: Session) -> None:
@@ -123,3 +126,29 @@ def test_cli_rejects_a_bad_server_time_and_an_unknown_account(
     )
     assert "unknown server time rule" in capsys.readouterr().err
     assert cli_main(["update-account", "--account-id", "999999", "--currency", "USD"]) == 1
+
+
+def test_cli_stats_prints_a_summary_and_handles_missing_and_empty_accounts(
+    engine, db_session, monkeypatch, capsys, account_and_key, trade_payload
+) -> None:
+    monkeypatch.setattr("app.cli.get_engine", lambda: engine)
+    account, _ = account_and_key
+    assert cli_main(["stats", "--account-id", "999999"]) == 1
+    assert "No account" in capsys.readouterr().err
+    assert cli_main(["stats", "--account-id", str(account.id)]) == 0
+    assert "no trades yet" in capsys.readouterr().out
+
+    update_account(db_session, account.id, starting_balance=Decimal("1000"))
+    for n, net in enumerate(["100", "-40"], start=1):
+        ingest_trades(
+            db_session,
+            account,
+            [TradeIn.model_validate(trade_payload(ticket=n, profit=net, commission="0"))],
+        )
+    assert cli_main(["stats", "--account-id", str(account.id), "--tz", "UTC"]) == 0
+    out = capsys.readouterr().out
+
+    assert "Net profit" in out and "60.00 USD (6.00% return)" in out
+    assert "Profit factor" in out and "2.50" in out
+    assert "Instrument" in out and "US30" in out
+    assert "Session (UTC)" in out and "Weekday (UTC)" in out

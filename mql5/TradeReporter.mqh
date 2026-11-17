@@ -340,8 +340,12 @@ private:
          if(code==401 || code==403)
             Print("TradeReporter: the API key was refused (HTTP ",code,"). Check InpApiKey.");
          else
-            if(code!=-1)
+            if(code>=100 && code<600)
                Print("TradeReporter: server answered HTTP ",code,", will retry: ",response);
+            else
+               if(code!=-1)
+                  Print("TradeReporter: no usable answer from ",m_endpoint," (status ",code,"). ",
+                        "Is the API running? The trade is kept and will be retried.");
          return(false);
         }
       // One bad trade rejects the whole batch, so retry them one by one and skip only the bad ones.

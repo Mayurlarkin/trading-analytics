@@ -2,7 +2,7 @@
 
 Full-stack trade analytics: import MT5 trade history, get equity curves, drawdown and per-instrument / per-session performance stats.
 
-> **Status: Phase 1 (data in) nearly done.** Trades can be imported from an MT5 report or posted by an EA through a secured, idempotent API. Analytics and the dashboard come next (see [Roadmap](#roadmap)).
+> **Status: data in and analytics done.** Trades arrive from an MT5 report or a live EA through a secured, idempotent API, and the analytics engine turns them into equity, drawdown and breakdown statistics (try `python -m app.cli stats`). The API endpoints and the React dashboard come next (see [Roadmap](#roadmap)).
 
 <!-- Add a CI badge once the repo is on GitHub:
 ![CI](https://github.com/<you>/<repo>/actions/workflows/ci.yml/badge.svg) -->
@@ -141,6 +141,28 @@ Timestamps here must already carry a timezone offset (they are stored as UTC), s
 - Only English-language `.xlsx` reports are supported; HTML reports are not.
 - The upload limit is enforced by the app; a request-size limit at the web server comes with the deployment hardening phase.
 
+## Analytics
+
+`api/app/analytics` is a set of pure functions: closed trades in, plain numbers out, with no database or web code, so every metric is tested against figures worked out by hand. See your own numbers now:
+
+```
+docker compose exec api python -m app.cli stats --account-id 1
+```
+
+It prints the summary (win rate, profit factor, expectancy, streaks, drawdown, recovery factor) and tables by instrument, session and weekday.
+
+**Definitions** (so the numbers can be audited)
+- A trade's result is its **net**: profit + commission + swap. A *win* is net above zero, a *loss* below zero, and exactly zero is *break-even*, counted separately. (MT5's own report counts break-even trades as profit trades, so its win rate can differ slightly.)
+- The **equity curve** is a closed-trade balance: starting balance plus each position's net result, in order of closing. Floating profit on open positions is not included.
+- **Drawdown** is the fall from the highest balance reached so far, with the starting balance as the first peak. The deepest drawdown is reported by amount and by percentage (often the same dip), with the peak and low dates and whether the balance got back to the peak. *Absolute drawdown* is the starting balance minus the lowest balance. *Recovery factor* is net profit divided by the deepest drawdown.
+- **Profit factor** is gross profit divided by gross loss; it is left empty (not infinite) when nothing was lost.
+- **Weekday, hour and session** use the time the trade was *opened*, on a chosen clock (New York by default). Sessions are half-open hour ranges on that clock (defaults: Asia 19-02, London 02-07, New York AM 07-12, New York PM 12-17, After hours 17-19) and can be replaced.
+- **Symbols** are grouped by a common name: the broker suffix is dropped and a small alias table maps known broker names (for example `T100.IFX_M` to `NAS100`). The database keeps the symbol exactly as sent.
+
+**Validation.** The formulas were also checked against the broker's own *Results* block of a real report, using its closing deals: net, gross profit and loss, profit factor, expected payoff, recovery factor, all three drawdown figures, trade count, largest and average loss, and both streaks matched exactly. The only differences were the break-even convention above. The real report is not in this repository.
+
+**Not yet:** a Sharpe-style ratio (MT5's own formula was not reproducible, so it will be added with an explicit definition), and deposits/withdrawals in the equity curve (the starting balance is used instead).
+
 ## Local development
 
 Run only the database in Docker, and the API and web app on your machine for fast reloads.
@@ -194,8 +216,8 @@ CI also builds the full Docker Compose stack against a fresh MySQL, then through
 - [x] **Phase 0:** foundations (repo, Compose, CI, health checks)
 - [x] **Phase 1a:** data model, migrations, secured idempotent ingest API, CLI
 - [x] **Phase 1b:** MT5 Excel report importer
-- [ ] **Phase 1c:** MQL5 reporter EA that posts closed trades *(written and its algorithm tested; waiting for the first compile and run in MT5)*
-- [ ] **Phase 2:** analytics engine (equity, drawdown, expectancy, breakdowns)
+- [x] **Phase 1c:** MQL5 reporter EA that posts closed trades
+- [x] **Phase 2:** analytics engine (equity, drawdown, expectancy, breakdowns) and a `stats` CLI command
 - [ ] **Phase 3:** API + auth
 - [ ] **Phase 4:** React dashboard
 - [ ] **Phase 5:** backtester *(stretch)*

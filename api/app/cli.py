@@ -2,6 +2,8 @@
 
 Examples:
     python -m app.cli create-account --email me@example.com --label "IFX Demo" --demo
+    python -m app.cli update-account --account-id 1 --currency ZAR --starting-balance 100000
+    python -m app.cli stats --account-id 1
     python -m app.cli revoke-api-key ta_AbCdEf12
 """
 
@@ -11,7 +13,11 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
+from app.analytics import by_instrument, by_session, by_weekday, summarize
+from app.analytics.adapters import load_closed_trades
+from app.analytics.text_report import format_groups, format_summary
 from app.db import get_engine
+from app.models import Account
 from app.services.accounts import create_account, revoke_api_key, update_account
 from app.timezones import InvalidServerTimeRule
 
@@ -41,6 +47,14 @@ def _build_parser() -> argparse.ArgumentParser:
     update.add_argument("--currency")
     update.add_argument("--starting-balance", type=Decimal)
 
+    stats = sub.add_parser("stats", help="print performance statistics for an account")
+    stats.add_argument("--account-id", type=int, required=True)
+    stats.add_argument(
+        "--tz",
+        default="America/New_York",
+        help="clock for the weekday and session tables (default America/New_York)",
+    )
+
     revoke = sub.add_parser("revoke-api-key", help="revoke key(s) by their displayed prefix")
     revoke.add_argument("prefix", help='the part shown after creation, e.g. "ta_AbCdEf12"')
     return parser
@@ -54,6 +68,29 @@ def main(argv: list[str] | None = None) -> int:
     except InvalidServerTimeRule as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+
+def _print_stats(db: Session, account_id: int, tz: str) -> int:
+    account = db.get(Account, account_id)
+    if account is None:
+        print(f"No account with id {account_id}", file=sys.stderr)
+        return 1
+    trades = load_closed_trades(db, account.id)
+    if not trades:
+        print(f"{account.label}: no trades yet.")
+        return 0
+    summary = summarize(trades, account.starting_balance)
+    blocks = [
+        format_summary(account.label, account.currency, summary),
+        format_groups("Instrument", by_instrument(trades)),
+        format_groups(f"Session ({tz})", by_session(trades, tz)),
+        format_groups(f"Weekday ({tz})", by_weekday(trades, tz)),
+    ]
+    print("\n\n".join(blocks))
+    if account.starting_balance <= 0:
+        print("\nNote: this account has no starting balance, so drawdown percentages are "
+              "meaningless. Set it with update-account --starting-balance.")  # fmt: skip
+    return 0
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -92,6 +129,9 @@ def _run(args: argparse.Namespace) -> int:
                 f"currency={account.currency}, starting_balance={account.starting_balance}"
             )
             return 0
+
+        if args.command == "stats":
+            return _print_stats(db, args.account_id, args.tz)
 
         revoked = revoke_api_key(db, args.prefix)
         print(f"Revoked {revoked} key(s)")
