@@ -1,9 +1,10 @@
-"""Management commands (no login system yet, so accounts and API keys are created here).
+"""Management commands (the first user and account are created here; the dashboard does the rest).
 
 Examples:
     python -m app.cli create-account --email me@example.com --label "IFX Demo" --demo
     python -m app.cli update-account --account-id 1 --currency ZAR --starting-balance 100000
     python -m app.cli set-password --email me@example.com
+    python -m app.cli update-user --email me@example.com --new-email me@gmail.com
     python -m app.cli stats --account-id 1
     python -m app.cli revoke-api-key ta_AbCdEf12
 """
@@ -20,7 +21,14 @@ from app.analytics.adapters import load_closed_trades
 from app.analytics.text_report import format_groups, format_summary
 from app.db import get_engine
 from app.models import Account
-from app.services.accounts import create_account, revoke_api_key, update_account
+from app.services.accounts import (
+    DuplicateAccountLabel,
+    EmailTaken,
+    change_email,
+    create_account,
+    revoke_api_key,
+    update_account,
+)
 from app.services.users import WeakPassword, set_password
 from app.timezones import InvalidServerTimeRule
 
@@ -57,6 +65,10 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="read the password from standard input instead of asking (for scripts)",
     )
+
+    user = sub.add_parser("update-user", help="change the login email of a user")
+    user.add_argument("--email", required=True, help="the current email")
+    user.add_argument("--new-email", required=True)
 
     stats = sub.add_parser("stats", help="print performance statistics for an account")
     stats.add_argument("--account-id", type=int, required=True)
@@ -127,16 +139,20 @@ def _set_password(db: Session, email: str, from_stdin: bool) -> int:
 def _run(args: argparse.Namespace) -> int:
     with Session(get_engine()) as db:
         if args.command == "create-account":
-            account, key = create_account(
-                db,
-                email=args.email,
-                label=args.label,
-                broker=args.broker,
-                currency=args.currency,
-                starting_balance=args.starting_balance,
-                is_demo=args.demo,
-                server_timezone=args.server_time,
-            )
+            try:
+                account, key = create_account(
+                    db,
+                    email=args.email,
+                    label=args.label,
+                    broker=args.broker,
+                    currency=args.currency,
+                    starting_balance=args.starting_balance,
+                    is_demo=args.demo,
+                    server_timezone=args.server_time,
+                )
+            except DuplicateAccountLabel as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
             if args.quiet:
                 print(key)
             else:
@@ -159,6 +175,18 @@ def _run(args: argparse.Namespace) -> int:
                 f"Account #{account.id} ({account.label}): server_time={account.server_timezone}, "
                 f"currency={account.currency}, starting_balance={account.starting_balance}"
             )
+            return 0
+
+        if args.command == "update-user":
+            try:
+                user = change_email(db, args.email, args.new_email)
+            except EmailTaken as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+            if user is None:
+                print(f"No user with email {args.email}", file=sys.stderr)
+                return 1
+            print(f"Login email is now {user.email}")
             return 0
 
         if args.command == "set-password":

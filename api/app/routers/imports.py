@@ -15,24 +15,18 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_ERRORS_SHOWN = 50
 
 
-@router.post("/mt5-report", response_model=Mt5ImportResult)
-def import_mt5_report_file(
-    file: UploadFile = File(description="MT5 History report exported as Excel (.xlsx)"),
-    server_time: str | None = Query(
-        default=None,
-        description=(
-            "How to read the report's times: 'ny_close' (New York + 7h, typical for IFX) or an "
-            "IANA zone such as 'Europe/Athens' or 'UTC'. Defaults to the account's stored value."
-        ),
-    ),
-    dry_run: bool = Query(default=False, description="Validate and count, but save nothing"),
-    account: Account = Depends(get_api_key_account),
-    db: Session = Depends(get_db),
-) -> Mt5ImportResult:
-    """Import closed positions from an MT5 report (History tab -> Report -> Excel).
+SERVER_TIME_HELP = (
+    "How to read the report's times: 'ny_close' (New York + 7h, typical for IFX) or an "
+    "IANA zone such as 'Europe/Athens' or 'UTC'. Defaults to the account's stored value."
+)
 
-    Only the Positions section is used. Safe to repeat: positions are matched on ticket.
-    """
+
+def run_mt5_import(
+    db: Session, account: Account, file: UploadFile, server_time: str | None, dry_run: bool
+) -> Mt5ImportResult:
+    """Read the upload and import it, turning every failure into the right HTTP error.
+
+    Shared by the API-key endpoint (EA/scripts) and the login endpoint (dashboard)."""
     data = file.file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file is larger than 10 MB")
@@ -54,3 +48,20 @@ def import_mt5_report_file(
                 ],
             },
         ) from exc
+
+
+@router.post("/mt5-report", response_model=Mt5ImportResult)
+def import_mt5_report_file(
+    file: UploadFile = File(description="MT5 History report exported as Excel (.xlsx)"),
+    server_time: str | None = Query(default=None, description=SERVER_TIME_HELP),
+    dry_run: bool = Query(default=False, description="Validate and count, but save nothing"),
+    account: Account = Depends(get_api_key_account),
+    db: Session = Depends(get_db),
+) -> Mt5ImportResult:
+    """Import closed positions from an MT5 report (History tab -> Report -> Excel).
+
+    Only the Positions section is used. Safe to repeat: positions are matched on ticket.
+    Authenticated with an account API key (X-API-Key); the dashboard uses
+    POST /accounts/{id}/import/mt5-report with a login instead.
+    """
+    return run_mt5_import(db, account, file, server_time, dry_run)

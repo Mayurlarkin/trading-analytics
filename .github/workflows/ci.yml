@@ -129,6 +129,51 @@ jobs:
           get "/accounts/$account/equity-curve" | grep -q '"points"'
           get "/accounts/$account/breakdown?by=instrument" | grep -q '"key":"NAS100"'
           get "/accounts/$account/trades?limit=2" | grep -q '"total":9'
+      - name: Manage accounts and API keys, and import a report, with a login
+        run: |
+          TOKEN=$(curl --fail --silent -X POST http://localhost:8000/auth/login \
+            -d "username=ci@example.com" -d "password=correct-horse-battery" \
+            | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+          echo "::add-mask::$TOKEN"
+          auth="Authorization: Bearer $TOKEN"
+          json() { python3 -c "import sys, json; print(json.load(sys.stdin)$1)"; }
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          api=http://localhost:8000
+          # a machine key is not a login
+          test "$(code -X POST $api/accounts -H "X-API-Key: $API_KEY" \
+            -H 'Content-Type: application/json' -d '{"label":"x"}')" = "401"
+          # create a second account and give it its own key
+          created=$(curl --fail --silent -X POST $api/accounts -H "$auth" \
+            -H 'Content-Type: application/json' \
+            -d '{"label":"Created by API","currency":"zar","server_timezone":"ny_close"}')
+          echo "$created"
+          echo "$created" | grep -q '"currency":"ZAR"'
+          account=$(echo "$created" | json "['id']")
+          test "$(code -X POST $api/accounts -H "$auth" -H 'Content-Type: application/json' \
+            -d '{"label":"created by api"}')" = "409"
+          issued=$(curl --fail --silent -X POST $api/accounts/$account/api-keys -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"label":"smoke"}')
+          NEW_KEY=$(echo "$issued" | json "['key']"); echo "::add-mask::$NEW_KEY"
+          key_id=$(echo "$issued" | json "['id']")
+          # the new key sends a trade; a login imports the sample report into the same account
+          curl --fail --silent -X POST $api/ingest/trades -H "X-API-Key: $NEW_KEY" \
+            -H 'Content-Type: application/json' -d @.github/smoke/trades.json | grep -q '"created":1'
+          curl --fail --silent -X POST $api/accounts/$account/import/mt5-report -H "$auth" \
+            -F "file=@api/tests/fixtures/mt5_sample_report.xlsx" | grep -q '"created":8'
+          summary=$(curl --fail --silent -H "$auth" $api/accounts/$account/summary)
+          echo "$summary" | grep -q '"trades":9'
+          echo "$summary" | grep -q '"net_profit":"-848.62"'
+          # the key is listed without its secret, and stops working once revoked
+          listing=$(curl --fail --silent -H "$auth" $api/accounts/$account/api-keys); echo "$listing"
+          echo "$listing" | grep -q '"label":"smoke"'
+          if echo "$listing" | grep -q "$NEW_KEY"; then echo "secret leaked in list"; exit 1; fi
+          test "$(code -X DELETE $api/accounts/$account/api-keys/$key_id -H "$auth")" = "204"
+          test "$(code -X POST $api/ingest/trades -H "X-API-Key: $NEW_KEY" \
+            -H 'Content-Type: application/json' -d @.github/smoke/trades.json)" = "401"
+          # the first account's key (from the CLI) is not touched, and ids cannot be probed
+          test "$(code -X POST $api/ingest/trades -H "X-API-Key: $API_KEY" \
+            -H 'Content-Type: application/json' -d @.github/smoke/trades.json)" = "200"
+          test "$(code -H "$auth" $api/accounts/999999/api-keys)" = "404"
       - name: Show logs on failure
         if: failure()
         run: docker compose logs

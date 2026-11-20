@@ -71,6 +71,8 @@ class ApiKey(Base):
     # First characters of the key, so a human can tell keys apart (and revoke one).
     key_prefix: Mapped[str] = mapped_column(String(16), index=True)
     key_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    # A human name for the key ("MT5 EA"), so the dashboard can tell keys apart.
+    label: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 

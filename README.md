@@ -73,6 +73,7 @@ Revoke a key with `python -m app.cli revoke-api-key <prefix>` (the first 11 char
 
 1. In MT5, open the **History** tab, choose the date range, right-click, **Report**, **Open XML (MS Excel)**. The report must be in English.
 2. In the docs page, open **POST /import/mt5-report**, **Try it out**, choose the file and **Execute**. Set `dry_run` to `true` first to preview the counts without saving anything.
+   Logged in instead of holding an API key? Use **POST /accounts/{id}/import/mt5-report** the same way.
 3. Or from a terminal (PowerShell: use `curl.exe`; `curl` is an alias for something else):
 
 ```
@@ -172,7 +173,7 @@ Two kinds of caller, two kinds of credential:
 | A person (dashboard, `/docs`) | email + password, giving a login token | read their own accounts' analytics |
 | A machine (EA, script) | per-account API key | send trades and import reports |
 
-A login token cannot send trades and an API key cannot read analytics, so a leaked EA key cannot be used to browse anything.
+A login token cannot send trades and an API key cannot read analytics, so a leaked EA key cannot be used to browse anything. (People can also *manage* accounts, keys and imports with their login, see below.)
 
 **Log in once** (there is no public sign-up yet; users are created from the command line):
 
@@ -191,6 +192,21 @@ It asks for the password twice and needs 10 to 128 characters. Then open http://
 | `GET /accounts/{id}/equity-curve` | balance after every trade, with running peak and drawdown |
 | `GET /accounts/{id}/breakdown?by=instrument\|session\|weekday\|hour&tz=...` | the same statistics per group |
 | `GET /accounts/{id}/trades` | paged list; filter by `symbol`, `direction`, `result`, dates; sort by `close_time`, `open_time`, `profit`, `net` |
+
+### Managing accounts and keys (login)
+
+Everything the command line does for accounts is also available with a login, which is what the dashboard uses. Only the first user and account need the command line.
+
+| Endpoint | Does |
+|---|---|
+| `POST /accounts` | create an account (label, broker, currency, starting balance, demo flag, broker server time); labels are unique per person, ignoring capitals |
+| `PATCH /accounts/{id}` | change some settings; only the fields you send change, unknown fields are refused |
+| `GET /accounts/{id}/api-keys` | list keys (label, prefix, created, revoked); the secret is never shown again |
+| `POST /accounts/{id}/api-keys` | issue a key for an EA or script; **the secret is in this response only** (at most 10 active keys per account) |
+| `DELETE /accounts/{id}/api-keys/{key_id}` | revoke a key; it stops working immediately |
+| `POST /accounts/{id}/import/mt5-report` | import an MT5 report with a login; same rules as `/import/mt5-report` (`dry_run`, `server_time`) |
+
+Other people's accounts and keys answer `404`, the same as ones that do not exist. To change the email you log in with: `python -m app.cli update-user --email old@example.com --new-email new@example.com`.
 
 The analytics endpoints accept `closed_from` (inclusive) and `closed_until` (exclusive), written with a timezone such as `2026-03-01T00:00:00Z`. For a period, the starting balance is the balance at that moment, so drawdown and return are right for that window. Money is returned as strings with 2 decimals (`"-1234.50"`) and ratios as fractions with 4 (`"0.2500"` is 25%), so nothing is lost to floating point.
 
@@ -258,7 +274,7 @@ CI also builds the full Docker Compose stack against a fresh MySQL, then through
 - [x] **Phase 1c:** MQL5 reporter EA that posts closed trades
 - [x] **Phase 2:** analytics engine (equity, drawdown, expectancy, breakdowns) and a `stats` CLI command
 - [x] **Phase 3a:** login + read endpoints over the analytics
-- [ ] **Phase 3b:** manage accounts and API keys, and import reports from the dashboard (login instead of an API key)
+- [x] **Phase 3b:** manage accounts and API keys, and import reports, with a login
 - [ ] **Phase 4:** React dashboard
 - [ ] **Phase 5:** backtester *(stretch)*
 - [ ] **Phase 6:** real-time updates *(stretch)*
