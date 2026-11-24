@@ -1,40 +1,22 @@
-import { useEffect, useState } from 'react'
-import { fetchSystemHealth, type SystemHealth } from './api'
+import { Navigate, Route, Routes } from 'react-router-dom'
+import { RequireAuth } from './auth/RequireAuth'
+import { Layout } from './components/Layout'
+import { AccountOverviewPage } from './pages/AccountOverviewPage'
+import { AccountsPage } from './pages/AccountsPage'
+import { LoginPage } from './pages/LoginPage'
 
 function App() {
-  const [health, setHealth] = useState<SystemHealth | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    void fetchSystemHealth().then((result) => {
-      if (!cancelled) setHealth(result)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
   return (
-    <main className="app">
-      <h1>Trading Analytics</h1>
-      <p className="tagline">Trade history in, performance insight out.</p>
-
-      <section aria-label="System status" className="status">
-        <h2>System status</h2>
-        {health === null ? (
-          <p>Checking…</p>
-        ) : (
-          <ul>
-            <li>
-              API: <strong data-status={health.api}>{health.api}</strong>
-            </li>
-            <li>
-              Database: <strong data-status={health.database}>{health.database}</strong>
-            </li>
-          </ul>
-        )}
-      </section>
-    </main>
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route element={<RequireAuth />}>
+        <Route element={<Layout />}>
+          <Route index element={<AccountsPage />} />
+          <Route path="accounts/:id" element={<AccountOverviewPage />} />
+        </Route>
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   )
 }
 

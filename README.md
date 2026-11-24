@@ -2,7 +2,7 @@
 
 Full-stack trade analytics: import MT5 trade history, get equity curves, drawdown and per-instrument / per-session performance stats.
 
-> **Status: data in and analytics done.** Trades arrive from an MT5 report or a live EA through a secured, idempotent API, and the analytics engine turns them into equity, drawdown and breakdown statistics, served by a login-protected API (try `python -m app.cli stats`, or the interactive docs). The React dashboard comes next (see [Roadmap](#roadmap)).
+> **Status: dashboard started.** Trades arrive from an MT5 report or a live EA through a secured, idempotent API; the analytics engine turns them into equity, drawdown and breakdown statistics; and a React dashboard (login, accounts, overview with balance and drawdown charts) shows them. Trades table, breakdowns, import and key management pages come next (see [Roadmap](#roadmap)).
 
 <!-- Add a CI badge once the repo is on GitHub:
 ![CI](https://github.com/<you>/<repo>/actions/workflows/ci.yml/badge.svg) -->
@@ -13,7 +13,7 @@ Full-stack trade analytics: import MT5 trade history, get equity curves, drawdow
 |---|---|
 | API | FastAPI, Pydantic v2, SQLAlchemy 2, Alembic (migrations) |
 | Database | MySQL 8.4 |
-| Web | React 19, TypeScript, Vite |
+| Web | React 19, TypeScript, Vite, React Router, TanStack Query, hand-built SVG charts |
 | Tests | pytest, Vitest + Testing Library |
 | Tooling | Ruff, oxlint, Docker Compose, GitHub Actions |
 
@@ -42,9 +42,9 @@ cp .env.example .env        # optional: defaults work for local use
 docker compose up --build
 ```
 
-- Web: http://localhost:8080
+- Web: http://localhost:8080 (log in with the user you create below)
 - API docs: http://localhost:8000/docs
-- The home page shows live API and database status.
+- The login page and the footer show live API and database status.
 
 ## Getting trades in
 
@@ -218,6 +218,16 @@ The analytics endpoints accept `closed_from` (inclusive) and `closed_until` (exc
 - The signing secret has a development default, but the app **refuses to start** with `ENVIRONMENT` set to anything other than `development` unless `JWT_SECRET` is a random value of 32+ characters (see `.env.example`).
 - Not done yet, planned for the hardening phase: login rate limiting and lockout, refresh tokens, and password reset.
 
+## The dashboard
+
+Open http://localhost:8080 and log in with the email and password you set (see [API and login](#api-and-login)).
+
+- **Accounts:** your accounts with trade count, starting balance and last close; create a new one (name, currency, starting balance, demo flag, broker server time).
+- **Overview:** net profit, return, win rate, profit factor, expectancy, average win and loss, max drawdown and average holding time, plus a balance chart and a drawdown chart. A period filter (all time, 12 months, 90 days, 30 days) scopes everything on the page; while a new period loads, the previous figures stay on screen, dimmed.
+- **Charts** are drawn by hand in SVG (no chart library): a 2px line with a faint wash, hairline grid, an end label, a crosshair tooltip that follows the mouse or touch, and arrow-key reading for keyboard users. Each chart has a **Show table** view of the same numbers. Colors come from one colour-blind-checked palette with a dark theme that follows your system setting.
+
+How it talks to the API: `src/api/http.ts` is one small request function (token in, `ApiError` out); `src/auth` holds the login token (in `sessionStorage`, so it ends with the tab) and logs out when the API says the token is no longer valid; `src/api/queries.ts` wraps each endpoint in a TanStack Query hook. Money stays a string until the moment it is drawn or formatted. The API must list the web address in `CORS_ORIGINS` (Compose already does for `http://localhost:8080`; use `localhost`, not `127.0.0.1`).
+
 ## Local development
 
 Run only the database in Docker, and the API and web app on your machine for fast reloads.
@@ -237,6 +247,7 @@ uvicorn app.main:app --reload
 cd web
 npm install
 npm run dev                                             # http://localhost:5173
+# (the API's CORS_ORIGINS defaults to this address; VITE_API_URL points the web app at the API)
 ```
 
 ## Tests and checks
@@ -275,7 +286,8 @@ CI also builds the full Docker Compose stack against a fresh MySQL, then through
 - [x] **Phase 2:** analytics engine (equity, drawdown, expectancy, breakdowns) and a `stats` CLI command
 - [x] **Phase 3a:** login + read endpoints over the analytics
 - [x] **Phase 3b:** manage accounts and API keys, and import reports, with a login
-- [ ] **Phase 4:** React dashboard
+- [x] **Phase 4a:** React dashboard: login, accounts, overview with balance and drawdown charts
+- [ ] **Phase 4b:** trades table, breakdown charts, import page, account settings and API key management
 - [ ] **Phase 5:** backtester *(stretch)*
 - [ ] **Phase 6:** real-time updates *(stretch)*
 - [ ] **Phase 7:** hardening + free-tier deploy + demo mode
